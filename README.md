@@ -6,6 +6,6 @@ This repository is created to host the source code and example scripts for the p
 We provide this public repository as the access point for the code and experiment scripts used in the paper.
 
 ## Release plan
-The full implementation (training/inference scripts and example prompts) will be released **after the paper is accepted/published** to ensure consistency between the public version and the final version of the article.
+The full implementation (training/inference scripts and example prompts) will be released after the paper is accepted/published to ensure consistency between the public version and the final version of the article.
 
 If you need early access for review purposes, please contact the corresponding author.
