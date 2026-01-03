@@ -25,7 +25,7 @@ def main() -> None:
     ap.add_argument(
         "--out",
         type=str,
-        default="data/processed/ec2dsl_pairs.json",
+        default="data/raw/seq2seq_train.json",
         help="Output path for the downloaded dataset JSON file.",
     )
     args = ap.parse_args()
