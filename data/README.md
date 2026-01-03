@@ -19,7 +19,7 @@ Run the script:
   python scripts/download_seq2seq_data.py
 
 The dataset will be saved to:
-  data/processed/ec2dsl_pairs.json
+  data/raw/seq2seq_train.json
 
 Splits (for reproducibility)
 ----------------------------
