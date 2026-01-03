@@ -1,15 +1,16 @@
+import argparse
 import json
 import os
 import random
-from typing import Dict, List
+from datetime import datetime
+from typing import Any, Dict, List
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from sklearn.model_selection import train_test_split
 from transformers import (
-    AutoTokenizer,
     EncoderDecoderModel,
+    AutoTokenizer,
     Trainer,
     TrainingArguments,
     DataCollatorForSeq2Seq,
@@ -18,7 +19,7 @@ from rouge_score import rouge_scorer
 import sacrebleu
 
 
-def set_seed(seed: int = 42) -> None:
+def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -26,46 +27,52 @@ def set_seed(seed: int = 42) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-class Text2TextDataset(Dataset):
+def read_jsonl(path: str) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
+
+
+class EncDecDataset(Dataset):
     def __init__(
         self,
-        inputs: List[str],
-        targets: List[str],
-        tokenizer: AutoTokenizer,
-        max_source_length: int = 256,
-        max_target_length: int = 256,
+        examples: List[Dict[str, Any]],
+        enc_tok,
+        dec_tok,
+        max_source_length: int,
+        max_target_length: int,
     ):
-        self.inputs = inputs
-        self.targets = targets
-        self.tokenizer = tokenizer
+        self.examples = examples
+        self.enc_tok = enc_tok
+        self.dec_tok = dec_tok
         self.max_source_length = max_source_length
         self.max_target_length = max_target_length
 
     def __len__(self) -> int:
-        return len(self.inputs)
+        return len(self.examples)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        source = self.inputs[idx]
-        target = self.targets[idx]
-
-        src = self.tokenizer(
-            source,
-            padding="max_length",
-            truncation=True,
+        ex = self.examples[idx]
+        src = self.enc_tok(
+            ex["intent"],
             max_length=self.max_source_length,
-            return_tensors="pt",
-        )
-        tgt = self.tokenizer(
-            target,
             padding="max_length",
             truncation=True,
-            max_length=self.max_target_length,
             return_tensors="pt",
         )
-
+        tgt = self.dec_tok(
+            ex["snippet"],
+            max_length=self.max_target_length,
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt",
+        )
         labels = tgt["input_ids"].squeeze(0)
-        labels[labels == self.tokenizer.pad_token_id] = -100  # ignore pad in loss
-
+        labels[labels == self.dec_tok.pad_token_id] = -100
         return {
             "input_ids": src["input_ids"].squeeze(0),
             "attention_mask": src["attention_mask"].squeeze(0),
@@ -73,151 +80,144 @@ class Text2TextDataset(Dataset):
         }
 
 
-def build_compute_metrics(tokenizer: AutoTokenizer):
+def build_compute_metrics(dec_tok):
     scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
 
     def compute_metrics(eval_pred):
-        predictions, labels = eval_pred
+        preds, labels = eval_pred
+        decoded_preds = dec_tok.batch_decode(preds, skip_special_tokens=True)
+        labels = np.where(labels == -100, dec_tok.pad_token_id, labels)
+        decoded_labels = dec_tok.batch_decode(labels, skip_special_tokens=True)
 
-        decoded_preds = tokenizer.batch_decode(predictions, skip_special_tokens=True)
-        labels = np.where(labels == -100, tokenizer.pad_token_id, labels)
-        decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
-
-        rouge_totals = {"rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0}
-        for pred, gold in zip(decoded_preds, decoded_labels):
-            scores = scorer.score(gold, pred)
-            rouge_totals["rouge1"] += scores["rouge1"].fmeasure
-            rouge_totals["rouge2"] += scores["rouge2"].fmeasure
-            rouge_totals["rougeL"] += scores["rougeL"].fmeasure
-
+        rsum = {"rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0}
+        for p, g in zip(decoded_preds, decoded_labels):
+            s = scorer.score(g, p)
+            for k in rsum:
+                rsum[k] += s[k].fmeasure
         n = max(1, len(decoded_preds))
-        rouge_avg = {k: v / n for k, v in rouge_totals.items()}
-
+        rouge = {k: v / n for k, v in rsum.items()}
         bleu = sacrebleu.corpus_bleu(decoded_preds, [decoded_labels]).score
-
-        return {
-            "rouge1": rouge_avg["rouge1"],
-            "rouge2": rouge_avg["rouge2"],
-            "rougeL": rouge_avg["rougeL"],
-            "bleu": bleu,
-        }
+        return {"rouge1": rouge["rouge1"], "rouge2": rouge["rouge2"], "rougeL": rouge["rougeL"], "bleu": bleu}
 
     return compute_metrics
 
 
+def save_json(path: str, obj: Dict[str, Any]) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+
+
 def main() -> None:
-    # Config via environment variables (safe for public repos)
-    data_path = os.getenv("DATA_PATH", "data.json")
-    output_dir = os.getenv("OUTPUT_DIR", "./biobert_seq2seq_model")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--train_path", type=str, default="data/splits/train.jsonl")
+    ap.add_argument("--valid_path", type=str, default="data/splits/valid.jsonl")
+    ap.add_argument("--test_path", type=str, default="data/splits/test.jsonl")
 
-    encoder_name = os.getenv("ENCODER_NAME", "dmis-lab/biobert-base-cased-v1.1")
-    decoder_name = os.getenv("DECODER_NAME", "bert-base-uncased")
+    ap.add_argument("--encoder_name", type=str, default="dmis-lab/biobert-base-cased-v1.1")
+    ap.add_argument("--decoder_name", type=str, default="bert-base-uncased")
+    ap.add_argument("--output_dir", type=str, default="outputs/biobert")
+    ap.add_argument("--seed", type=int, default=42)
 
-    test_size = float(os.getenv("TEST_SIZE", "0.1"))
-    seed = int(os.getenv("SEED", "42"))
+    ap.add_argument("--max_source_length", type=int, default=256)
+    ap.add_argument("--max_target_length", type=int, default=256)
 
-    max_source_length = int(os.getenv("MAX_SOURCE_LENGTH", "256"))
-    max_target_length = int(os.getenv("MAX_TARGET_LENGTH", "256"))
+    ap.add_argument("--lr", type=float, default=5e-5)
+    ap.add_argument("--train_batch_size", type=int, default=4)
+    ap.add_argument("--eval_batch_size", type=int, default=4)
+    ap.add_argument("--epochs", type=int, default=3)
+    ap.add_argument("--weight_decay", type=float, default=0.01)
 
-    lr = float(os.getenv("LR", "5e-5"))
-    train_bs = int(os.getenv("TRAIN_BATCH_SIZE", "4"))
-    eval_bs = int(os.getenv("EVAL_BATCH_SIZE", "4"))
-    epochs = int(os.getenv("EPOCHS", "3"))
-    weight_decay = float(os.getenv("WEIGHT_DECAY", "0.01"))
+    ap.add_argument("--num_beams", type=int, default=4)
+    ap.add_argument("--max_new_tokens", type=int, default=128)
+    args = ap.parse_args()
 
-    # Generation settings (used for evaluation when predict_with_generate=True)
-    num_beams = int(os.getenv("NUM_BEAMS", "4"))
-    max_new_tokens = int(os.getenv("MAX_NEW_TOKENS", "128"))
-
-    # Whether to compute ROUGE/BLEU during eval
-    enable_metrics = os.getenv("ENABLE_METRICS", "1") == "1"
-
-    set_seed(seed)
+    set_seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
 
-    with open(data_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    train_rows = read_jsonl(args.train_path)
+    valid_rows = read_jsonl(args.valid_path)
+    test_rows = read_jsonl(args.test_path)
+    print(f"Loaded splits: train={len(train_rows)}, valid={len(valid_rows)}, test={len(test_rows)}")
 
-    intents = [x["intent"] for x in data]
-    snippets = [x["snippet"] for x in data]
+    enc_tok = AutoTokenizer.from_pretrained(args.encoder_name)
+    dec_tok = AutoTokenizer.from_pretrained(args.decoder_name)
 
-    train_inputs, val_inputs, train_targets, val_targets = train_test_split(
-        intents,
-        snippets,
-        test_size=test_size,
-        random_state=seed,
-        shuffle=True,
-    )
+    model = EncoderDecoderModel.from_encoder_decoder_pretrained(args.encoder_name, args.decoder_name)
 
-    tokenizer = AutoTokenizer.from_pretrained(decoder_name)
-    # Ensure pad token exists (BERT does)
-    if tokenizer.pad_token_id is None:
-        raise ValueError("Tokenizer has no pad_token_id. Please use a tokenizer with a pad token.")
-
-    model = EncoderDecoderModel.from_encoder_decoder_pretrained(encoder_name, decoder_name)
-
-    # Critical config for EncoderDecoderModel generation/training
-    model.config.pad_token_id = tokenizer.pad_token_id
-    model.config.eos_token_id = tokenizer.sep_token_id  # use [SEP] as EOS for BERT decoder
-    model.config.decoder_start_token_id = tokenizer.cls_token_id
+    # configure special tokens for generation
+    model.config.decoder_start_token_id = dec_tok.cls_token_id
+    model.config.eos_token_id = dec_tok.sep_token_id
+    model.config.pad_token_id = dec_tok.pad_token_id
     model.config.vocab_size = model.config.decoder.vocab_size
 
-    train_dataset = Text2TextDataset(
-        train_inputs,
-        train_targets,
-        tokenizer,
-        max_source_length=max_source_length,
-        max_target_length=max_target_length,
-    )
-    val_dataset = Text2TextDataset(
-        val_inputs,
-        val_targets,
-        tokenizer,
-        max_source_length=max_source_length,
-        max_target_length=max_target_length,
-    )
+    train_ds = EncDecDataset(train_rows, enc_tok, dec_tok, args.max_source_length, args.max_target_length)
+    valid_ds = EncDecDataset(valid_rows, enc_tok, dec_tok, args.max_source_length, args.max_target_length)
+    test_ds = EncDecDataset(test_rows, enc_tok, dec_tok, args.max_source_length, args.max_target_length)
 
-    data_collator = DataCollatorForSeq2Seq(tokenizer=tokenizer, model=model)
+    run_dir = os.path.join(args.output_dir, "run")
+    model_dir = os.path.join(args.output_dir, "model")
+    metrics_path = os.path.join(args.output_dir, "metrics.json")
 
-    training_args = TrainingArguments(
-        output_dir="./results_biobert",
+    targs = TrainingArguments(
+        output_dir=run_dir,
         evaluation_strategy="epoch",
         save_strategy="epoch",
         save_total_limit=1,
-        learning_rate=lr,
-        per_device_train_batch_size=train_bs,
-        per_device_eval_batch_size=eval_bs,
-        num_train_epochs=epochs,
-        weight_decay=weight_decay,
-        logging_dir="./logs",
+        learning_rate=args.lr,
+        per_device_train_batch_size=args.train_batch_size,
+        per_device_eval_batch_size=args.eval_batch_size,
+        num_train_epochs=args.epochs,
+        weight_decay=args.weight_decay,
+        logging_dir=os.path.join(args.output_dir, "logs"),
         logging_strategy="epoch",
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         predict_with_generate=True,
-        generation_num_beams=num_beams,
-        generation_max_new_tokens=max_new_tokens,
+        generation_num_beams=args.num_beams,
+        generation_max_new_tokens=args.max_new_tokens,
         report_to=[],
-        seed=seed,
-        data_seed=seed,
+        seed=args.seed,
+        data_seed=args.seed,
     )
+
+    collator = DataCollatorForSeq2Seq(tokenizer=dec_tok, model=model)
 
     trainer = Trainer(
         model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=val_dataset,
-        tokenizer=tokenizer,
-        data_collator=data_collator,
-        compute_metrics=build_compute_metrics(tokenizer) if enable_metrics else None,
+        args=targs,
+        train_dataset=train_ds,
+        eval_dataset=valid_ds,
+        tokenizer=dec_tok,  # decoding side
+        data_collator=collator,
+        compute_metrics=build_compute_metrics(dec_tok),
     )
 
     trainer.train()
+    test_metrics = trainer.evaluate(eval_dataset=test_ds, metric_key_prefix="test")
 
-    os.makedirs(output_dir, exist_ok=True)
-    trainer.save_model(output_dir)
-    tokenizer.save_pretrained(output_dir)
-    print(f"Saved model and tokenizer to: {output_dir}")
+    os.makedirs(model_dir, exist_ok=True)
+    trainer.save_model(model_dir)
+    enc_tok.save_pretrained(os.path.join(model_dir, "encoder_tokenizer"))
+    dec_tok.save_pretrained(os.path.join(model_dir, "decoder_tokenizer"))
+
+    summary = {
+        "baseline": "biobert",
+        "model": {"encoder": args.encoder_name, "decoder": args.decoder_name},
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "seed": args.seed,
+        "paths": {"train": args.train_path, "valid": args.valid_path, "test": args.test_path},
+        "metrics": {
+            "rouge1": float(test_metrics.get("test_rouge1", 0.0)),
+            "rouge2": float(test_metrics.get("test_rouge2", 0.0)),
+            "rougeL": float(test_metrics.get("test_rougeL", 0.0)),
+            "bleu": float(test_metrics.get("test_bleu", 0.0)),
+        },
+    }
+    save_json(metrics_path, summary)
+    print("Test metrics:", summary["metrics"])
+    print("Saved:", metrics_path)
 
 
 if __name__ == "__main__":
