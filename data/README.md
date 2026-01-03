@@ -71,5 +71,3 @@ Important note about "trial-aware" split
 ----------------------------------------
 The upstream seq2seq file used here contains only (intent, snippet) pairs and does not include
 a trial identifier. Therefore, the provided split is a deterministic example-level split.
-(If a trial identifier mapping is available, the split script can be extended to support
-trial-aware splitting.)
