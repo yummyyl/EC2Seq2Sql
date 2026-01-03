@@ -1,15 +1,16 @@
+import argparse
 import json
 import os
 import random
-from typing import Dict, List
+from datetime import datetime
+from typing import Any, Dict, List
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from sklearn.model_selection import train_test_split
 from transformers import (
-    T5Tokenizer,
     T5ForConditionalGeneration,
+    T5Tokenizer,
     Trainer,
     TrainingArguments,
 )
@@ -17,7 +18,7 @@ from rouge_score import rouge_scorer
 import sacrebleu
 
 
-def set_seed(seed: int = 42) -> None:
+def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -25,27 +26,37 @@ def set_seed(seed: int = 42) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def read_jsonl(path: str) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+    return rows
+
+
 class Seq2SeqDataset(Dataset):
     def __init__(
         self,
-        inputs: List[str],
-        targets: List[str],
+        examples: List[Dict[str, Any]],
         tokenizer: T5Tokenizer,
         max_source_length: int = 256,
         max_target_length: int = 256,
     ):
-        self.inputs = inputs
-        self.targets = targets
+        self.examples = examples
         self.tokenizer = tokenizer
         self.max_source_length = max_source_length
         self.max_target_length = max_target_length
 
     def __len__(self) -> int:
-        return len(self.inputs)
+        return len(self.examples)
 
     def __getitem__(self, index: int) -> Dict[str, torch.Tensor]:
-        source = self.inputs[index]
-        target = self.targets[index]
+        ex = self.examples[index]
+        source = ex["intent"]
+        target = ex["snippet"]
 
         source_enc = self.tokenizer(
             source,
@@ -78,7 +89,7 @@ def build_compute_metrics(tokenizer: T5Tokenizer):
     def compute_metrics(eval_pred):
         predictions, labels = eval_pred
 
-        # With predict_with_generate=True, predictions are generated token ids.
+        # predictions are generated token ids when predict_with_generate=True
         decoded_preds = tokenizer.batch_decode(predictions, skip_special_tokens=True)
 
         # labels contain -100; replace with pad token id for decoding
@@ -107,102 +118,142 @@ def build_compute_metrics(tokenizer: T5Tokenizer):
     return compute_metrics
 
 
+def save_json(path: str, obj: Dict[str, Any]) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+
+
 def main() -> None:
-    # Config via environment variables (safe for public repos)
-    data_path = os.getenv("DATA_PATH", "data.json")
-    model_name = os.getenv("MODEL_NAME", "t5-small")
-    output_dir = os.getenv("OUTPUT_DIR", "./t5small")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--train_path", type=str, default="data/splits/train.jsonl")
+    ap.add_argument("--valid_path", type=str, default="data/splits/valid.jsonl")
+    ap.add_argument("--test_path", type=str, default="data/splits/test.jsonl")
 
-    test_size = float(os.getenv("TEST_SIZE", "0.1"))
-    seed = int(os.getenv("SEED", "42"))
+    ap.add_argument("--model_name", type=str, default="t5-small")
+    ap.add_argument("--output_dir", type=str, default="outputs/t5_small")
+    ap.add_argument("--seed", type=int, default=42)
 
-    max_source_length = int(os.getenv("MAX_SOURCE_LENGTH", "256"))
-    max_target_length = int(os.getenv("MAX_TARGET_LENGTH", "256"))
+    ap.add_argument("--max_source_length", type=int, default=256)
+    ap.add_argument("--max_target_length", type=int, default=256)
 
-    lr = float(os.getenv("LR", "5e-5"))
-    train_bs = int(os.getenv("TRAIN_BATCH_SIZE", "4"))
-    eval_bs = int(os.getenv("EVAL_BATCH_SIZE", "4"))
-    epochs = int(os.getenv("EPOCHS", "5"))
-    weight_decay = float(os.getenv("WEIGHT_DECAY", "0.01"))
+    ap.add_argument("--lr", type=float, default=5e-5)
+    ap.add_argument("--train_batch_size", type=int, default=4)
+    ap.add_argument("--eval_batch_size", type=int, default=4)
+    ap.add_argument("--epochs", type=int, default=5)
+    ap.add_argument("--weight_decay", type=float, default=0.01)
 
-    # Generation settings used during evaluation
-    num_beams = int(os.getenv("NUM_BEAMS", "4"))
-    max_new_tokens = int(os.getenv("MAX_NEW_TOKENS", "128"))
+    # generation during eval
+    ap.add_argument("--num_beams", type=int, default=4)
+    ap.add_argument("--max_new_tokens", type=int, default=128)
 
-    set_seed(seed)
+    args = ap.parse_args()
+
+    set_seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
 
-    with open(data_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    train_rows = read_jsonl(args.train_path)
+    valid_rows = read_jsonl(args.valid_path)
+    test_rows = read_jsonl(args.test_path)
 
-    intents = [x["intent"] for x in data]
-    snippets = [x["snippet"] for x in data]
+    print(f"Loaded splits: train={len(train_rows)}, valid={len(valid_rows)}, test={len(test_rows)}")
 
-    train_intents, val_intents, train_snippets, val_snippets = train_test_split(
-        intents,
-        snippets,
-        test_size=test_size,
-        random_state=seed,
-        shuffle=True,
-    )
-
-    tokenizer = T5Tokenizer.from_pretrained(model_name)
+    tokenizer = T5Tokenizer.from_pretrained(args.model_name)
+    model = T5ForConditionalGeneration.from_pretrained(args.model_name)
 
     train_dataset = Seq2SeqDataset(
-        train_intents,
-        train_snippets,
+        train_rows,
         tokenizer,
-        max_source_length=max_source_length,
-        max_target_length=max_target_length,
+        max_source_length=args.max_source_length,
+        max_target_length=args.max_target_length,
     )
-    val_dataset = Seq2SeqDataset(
-        val_intents,
-        val_snippets,
+    valid_dataset = Seq2SeqDataset(
+        valid_rows,
         tokenizer,
-        max_source_length=max_source_length,
-        max_target_length=max_target_length,
+        max_source_length=args.max_source_length,
+        max_target_length=args.max_target_length,
+    )
+    test_dataset = Seq2SeqDataset(
+        test_rows,
+        tokenizer,
+        max_source_length=args.max_source_length,
+        max_target_length=args.max_target_length,
     )
 
-    model = T5ForConditionalGeneration.from_pretrained(model_name)
+    run_dir = os.path.join(args.output_dir, "run")
+    model_dir = os.path.join(args.output_dir, "model")
+    metrics_path = os.path.join(args.output_dir, "metrics.json")
 
     training_args = TrainingArguments(
-        output_dir="./results",
+        output_dir=run_dir,
         evaluation_strategy="epoch",
         save_strategy="epoch",
         save_total_limit=1,
-        learning_rate=lr,
-        per_device_train_batch_size=train_bs,
-        per_device_eval_batch_size=eval_bs,
-        num_train_epochs=epochs,
-        weight_decay=weight_decay,
-        logging_dir="./logs",
+        learning_rate=args.lr,
+        per_device_train_batch_size=args.train_batch_size,
+        per_device_eval_batch_size=args.eval_batch_size,
+        num_train_epochs=args.epochs,
+        weight_decay=args.weight_decay,
+        logging_dir=os.path.join(args.output_dir, "logs"),
         logging_strategy="epoch",
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         predict_with_generate=True,
-        generation_num_beams=num_beams,
-        generation_max_new_tokens=max_new_tokens,
+        generation_num_beams=args.num_beams,
+        generation_max_new_tokens=args.max_new_tokens,
         report_to=[],
-        seed=seed,
-        data_seed=seed,
+        seed=args.seed,
+        data_seed=args.seed,
     )
 
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        eval_dataset=val_dataset,
+        eval_dataset=valid_dataset,
         tokenizer=tokenizer,
         compute_metrics=build_compute_metrics(tokenizer),
     )
 
     trainer.train()
 
-    os.makedirs(output_dir, exist_ok=True)
-    trainer.save_model(output_dir)
-    tokenizer.save_pretrained(output_dir)
-    print(f"Saved model and tokenizer to: {output_dir}")
+    # Evaluate on test split (for Table 4)
+    test_metrics = trainer.evaluate(eval_dataset=test_dataset, metric_key_prefix="test")
+    # test_metrics includes keys like: test_loss, test_rouge1, test_bleu, ...
+
+    os.makedirs(model_dir, exist_ok=True)
+    trainer.save_model(model_dir)
+    tokenizer.save_pretrained(model_dir)
+
+    summary = {
+        "model": args.model_name,
+        "baseline": "t5_small",
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "seed": args.seed,
+        "paths": {
+            "train": args.train_path,
+            "valid": args.valid_path,
+            "test": args.test_path,
+            "model_dir": model_dir,
+        },
+        "generation": {
+            "num_beams": args.num_beams,
+            "max_new_tokens": args.max_new_tokens,
+        },
+        "metrics": {
+            "rouge1": float(test_metrics.get("test_rouge1", 0.0)),
+            "rouge2": float(test_metrics.get("test_rouge2", 0.0)),
+            "rougeL": float(test_metrics.get("test_rougeL", 0.0)),
+            "bleu": float(test_metrics.get("test_bleu", 0.0)),
+        },
+        "raw_eval": {k: (float(v) if isinstance(v, (int, float, np.number)) else v) for k, v in test_metrics.items()},
+    }
+
+    save_json(metrics_path, summary)
+    print(f"Saved model to: {model_dir}")
+    print(f"Saved metrics to: {metrics_path}")
+    print("Test metrics:", summary["metrics"])
 
 
 if __name__ == "__main__":
