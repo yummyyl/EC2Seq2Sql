@@ -1,18 +1,28 @@
+import argparse
 import json
 import os
 import random
-from dataclasses import dataclass
-from typing import Dict, List
+from datetime import datetime
+from typing import Any, Dict, List
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Dataset
-from transformers import GPT2LMHeadModel, GPT2Tokenizer, AdamW
+from torch.utils.data import Dataset
+from transformers import (
+    GPT2LMHeadModel,
+    GPT2Tokenizer,
+    Trainer,
+    TrainingArguments,
+    DataCollatorForLanguageModeling,
+)
 from rouge_score import rouge_scorer
-from nltk.translate.bleu_score import sentence_bleu
+import sacrebleu
 
 
-def set_seed(seed: int = 42) -> None:
+SEP = "\n###SNIPPET###\n"
+
+
+def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -20,190 +30,187 @@ def set_seed(seed: int = 42) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-class IntentSnippetDataset(Dataset):
-    def __init__(self, data: List[Dict], tokenizer: GPT2Tokenizer, max_length: int = 512):
-        self.data = data
+def read_jsonl(path: str) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
+
+
+class GPT2TrainDataset(Dataset):
+    def __init__(self, examples: List[Dict[str, Any]], tokenizer: GPT2Tokenizer, max_length: int):
+        self.examples = examples
         self.tokenizer = tokenizer
         self.max_length = max_length
 
     def __len__(self) -> int:
-        return len(self.data)
+        return len(self.examples)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        item = self.data[idx]
-        input_text = item["intent"]
-        target_text = item["snippet"]
-
-        inputs = self.tokenizer(
-            input_text,
-            return_tensors="pt",
-            padding=False,
+        ex = self.examples[idx]
+        text = ex["intent"] + SEP + ex["snippet"]
+        enc = self.tokenizer(
+            text,
             truncation=True,
             max_length=self.max_length,
-        )
-        targets = self.tokenizer(
-            target_text,
+            padding="max_length",
             return_tensors="pt",
-            padding=False,
-            truncation=True,
-            max_length=self.max_length,
         )
-
-        return {
-            "input_ids": inputs["input_ids"].squeeze(0),
-            "labels": targets["input_ids"].squeeze(0),
-        }
-
-
-@dataclass
-class CollateConfig:
-    pad_token_id: int
-    label_pad_id: int = -100  # ignore padding in loss
+        input_ids = enc["input_ids"].squeeze(0)
+        attention_mask = enc["attention_mask"].squeeze(0)
+        labels = input_ids.clone()
+        labels[attention_mask == 0] = -100
+        return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
 
 
-def collate_fn(batch: List[Dict[str, torch.Tensor]], cfg: CollateConfig) -> Dict[str, torch.Tensor]:
-    max_len = max(max(x["input_ids"].size(0), x["labels"].size(0)) for x in batch)
-
-    input_ids_list = []
-    labels_list = []
-
-    for x in batch:
-        inp = x["input_ids"]
-        lab = x["labels"]
-
-        if inp.size(0) < max_len:
-            inp = torch.cat([inp, torch.full((max_len - inp.size(0),), cfg.pad_token_id, dtype=inp.dtype)])
-        if lab.size(0) < max_len:
-            lab = torch.cat([lab, torch.full((max_len - lab.size(0),), cfg.label_pad_id, dtype=lab.dtype)])
-
-        input_ids_list.append(inp)
-        labels_list.append(lab)
-
-    input_ids = torch.stack(input_ids_list, dim=0)
-    labels = torch.stack(labels_list, dim=0)
-    attention_mask = (input_ids != cfg.pad_token_id).long()
-
-    return {"input_ids": input_ids, "labels": labels, "attention_mask": attention_mask}
-
-
-def evaluate_model(
-    model: GPT2LMHeadModel,
-    dataloader: DataLoader,
-    tokenizer: GPT2Tokenizer,
-    device: torch.device,
-    max_new_tokens: int = 50,
-) -> Dict[str, float]:
-    model.eval()
+def compute_text_metrics(preds: List[str], golds: List[str]) -> Dict[str, float]:
     scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
+    rsum = {"rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0}
+    for p, g in zip(preds, golds):
+        s = scorer.score(g, p)
+        for k in rsum:
+            rsum[k] += s[k].fmeasure
+    n = max(1, len(preds))
+    rouge = {k: v / n for k, v in rsum.items()}
+    bleu = sacrebleu.corpus_bleu(preds, [golds]).score
+    return {"rouge1": rouge["rouge1"], "rouge2": rouge["rouge2"], "rougeL": rouge["rougeL"], "bleu": bleu}
 
-    total_bleu = 0.0
-    total_rouge = {"rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0}
-    count = 0
 
-    with torch.no_grad():
-        for batch in dataloader:
-            input_ids = batch["input_ids"].to(device)
-            attention_mask = batch["attention_mask"].to(device)
-            labels = batch["labels"].to(device)
+def save_json(path: str, obj: Dict[str, Any]) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
 
-            generated_ids = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=max_new_tokens,
-                pad_token_id=tokenizer.eos_token_id,
-            )
 
-            generated_texts = [tokenizer.decode(g, skip_special_tokens=True) for g in generated_ids]
+@torch.no_grad()
+def generate_snippet(model: GPT2LMHeadModel, tokenizer: GPT2Tokenizer, intent: str, max_new_tokens: int, num_beams: int) -> str:
+    prompt = intent + SEP
+    enc = tokenizer(prompt, return_tensors="pt")
+    enc = {k: v.to(model.device) for k, v in enc.items()}
 
-            # Replace -100 with pad token id for decoding labels safely
-            labels_for_decode = labels.clone()
-            labels_for_decode[labels_for_decode == -100] = tokenizer.pad_token_id
-            target_texts = [tokenizer.decode(l, skip_special_tokens=True) for l in labels_for_decode]
-
-            for pred, gold in zip(generated_texts, target_texts):
-                reference = [gold.split()]
-                candidate = pred.split()
-                total_bleu += sentence_bleu(reference, candidate)
-
-                rs = scorer.score(gold, pred)
-                for k in total_rouge:
-                    total_rouge[k] += rs[k].fmeasure
-
-                count += 1
-
-    if count == 0:
-        return {"bleu": 0.0, "rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0}
-
-    return {
-        "bleu": total_bleu / count,
-        "rouge1": total_rouge["rouge1"] / count,
-        "rouge2": total_rouge["rouge2"] / count,
-        "rougeL": total_rouge["rougeL"] / count,
-    }
+    out = model.generate(
+        **enc,
+        max_new_tokens=max_new_tokens,
+        num_beams=num_beams,
+        do_sample=False,
+        pad_token_id=tokenizer.eos_token_id,
+    )
+    text = tokenizer.decode(out[0], skip_special_tokens=True)
+    # extract part after SEP
+    if SEP in text:
+        return text.split(SEP, 1)[1].strip()
+    return text.strip()
 
 
 def main() -> None:
-    # Configuration via environment variables (safe for public repos)
-    data_path = os.getenv("DATA_PATH", "data.json")
-    output_dir = os.getenv("OUTPUT_DIR", "./fine_tuned_gpt2")
-    model_name = os.getenv("MODEL_NAME", "gpt2")
-    batch_size = int(os.getenv("BATCH_SIZE", "4"))
-    lr = float(os.getenv("LR", "5e-5"))
-    epochs = int(os.getenv("EPOCHS", "3"))
-    seed = int(os.getenv("SEED", "42"))
-    max_length = int(os.getenv("MAX_LENGTH", "512"))
-    max_new_tokens = int(os.getenv("MAX_NEW_TOKENS", "50"))
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--train_path", type=str, default="data/splits/train.jsonl")
+    ap.add_argument("--valid_path", type=str, default="data/splits/valid.jsonl")
+    ap.add_argument("--test_path", type=str, default="data/splits/test.jsonl")
 
-    set_seed(seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--model_name", type=str, default="gpt2")
+    ap.add_argument("--output_dir", type=str, default="outputs/gpt2")
+    ap.add_argument("--seed", type=int, default=42)
 
-    with open(data_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    ap.add_argument("--max_length", type=int, default=512)
+    ap.add_argument("--lr", type=float, default=5e-5)
+    ap.add_argument("--train_batch_size", type=int, default=4)
+    ap.add_argument("--eval_batch_size", type=int, default=4)
+    ap.add_argument("--epochs", type=int, default=3)
+    ap.add_argument("--weight_decay", type=float, default=0.0)
 
-    tokenizer = GPT2Tokenizer.from_pretrained(model_name, padding_side="left")
-    tokenizer.pad_token = tokenizer.eos_token  # GPT-2 has no pad token by default
+    ap.add_argument("--num_beams", type=int, default=1)
+    ap.add_argument("--max_new_tokens", type=int, default=128)
+    ap.add_argument("--max_test_examples", type=int, default=0, help="0 = no limit")
+    args = ap.parse_args()
 
-    dataset = IntentSnippetDataset(data=data, tokenizer=tokenizer, max_length=max_length)
-    cfg = CollateConfig(pad_token_id=tokenizer.eos_token_id)
+    set_seed(args.seed)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Device: {device}")
 
-    dataloader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        collate_fn=lambda b: collate_fn(b, cfg),
+    train_rows = read_jsonl(args.train_path)
+    valid_rows = read_jsonl(args.valid_path)
+    test_rows = read_jsonl(args.test_path)
+    print(f"Loaded splits: train={len(train_rows)}, valid={len(valid_rows)}, test={len(test_rows)}")
+
+    tokenizer = GPT2Tokenizer.from_pretrained(args.model_name)
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
+
+    model = GPT2LMHeadModel.from_pretrained(args.model_name)
+
+    train_ds = GPT2TrainDataset(train_rows, tokenizer, args.max_length)
+    valid_ds = GPT2TrainDataset(valid_rows, tokenizer, args.max_length)
+
+    collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+
+    run_dir = os.path.join(args.output_dir, "run")
+    model_dir = os.path.join(args.output_dir, "model")
+    metrics_path = os.path.join(args.output_dir, "metrics.json")
+
+    targs = TrainingArguments(
+        output_dir=run_dir,
+        evaluation_strategy="epoch",
+        save_strategy="epoch",
+        save_total_limit=1,
+        learning_rate=args.lr,
+        per_device_train_batch_size=args.train_batch_size,
+        per_device_eval_batch_size=args.eval_batch_size,
+        num_train_epochs=args.epochs,
+        weight_decay=args.weight_decay,
+        logging_dir=os.path.join(args.output_dir, "logs"),
+        logging_strategy="epoch",
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        report_to=[],
+        seed=args.seed,
+        data_seed=args.seed,
     )
 
-    model = GPT2LMHeadModel.from_pretrained(model_name).to(device)
-    optimizer = AdamW(model.parameters(), lr=lr)
+    trainer = Trainer(
+        model=model,
+        args=targs,
+        train_dataset=train_ds,
+        eval_dataset=valid_ds,
+        tokenizer=tokenizer,
+        data_collator=collator,
+    )
 
-    for epoch in range(epochs):
-        model.train()
-        last_loss = None
+    trainer.train()
 
-        for batch in dataloader:
-            input_ids = batch["input_ids"].to(device)
-            attention_mask = batch["attention_mask"].to(device)
-            labels = batch["labels"].to(device)
+    os.makedirs(model_dir, exist_ok=True)
+    trainer.save_model(model_dir)
+    tokenizer.save_pretrained(model_dir)
 
-            optimizer.zero_grad()
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
-            loss = outputs.loss
-            loss.backward()
-            optimizer.step()
+    # ---- Test generation + metrics ----
+    model.eval()
+    model.to(device)
 
-            last_loss = loss.item()
+    if args.max_test_examples and args.max_test_examples > 0:
+        test_rows = test_rows[: args.max_test_examples]
 
-        metrics = evaluate_model(model, dataloader, tokenizer, device, max_new_tokens=max_new_tokens)
-        print(
-            f"Epoch {epoch + 1}/{epochs} | loss={last_loss:.4f} "
-            f"| BLEU={metrics['bleu']:.4f} "
-            f"| ROUGE-1={metrics['rouge1']:.4f} ROUGE-2={metrics['rouge2']:.4f} ROUGE-L={metrics['rougeL']:.4f}"
-        )
+    preds, golds = [], []
+    for ex in test_rows:
+        preds.append(generate_snippet(model, tokenizer, ex["intent"], args.max_new_tokens, args.num_beams))
+        golds.append(ex["snippet"])
 
-    os.makedirs(output_dir, exist_ok=True)
-    model.save_pretrained(output_dir)
-    tokenizer.save_pretrained(output_dir)
-    print(f"Saved model and tokenizer to: {output_dir}")
+    m = compute_text_metrics(preds, golds)
+
+    summary = {
+        "baseline": "gpt2",
+        "model": args.model_name,
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "seed": args.seed,
+        "paths": {"train": args.train_path, "valid": args.valid_path, "test": args.test_path},
+        "generation": {"num_beams": args.num_beams, "max_new_tokens": args.max_new_tokens},
+        "metrics": m,
+    }
+    save_json(metrics_path, summary)
+    print("Test metrics:", m)
+    print("Saved:", metrics_path)
 
 
 if __name__ == "__main__":
