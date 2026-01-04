@@ -1,1 +1,53 @@
+# Python cache
+__pycache__/
+*.py[cod]
 
+# Env / secrets
+.env
+.env.*
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Downloaded / generated data (keep .gitkeep + README)
+data/raw/*
+!data/raw/.gitkeep
+!data/raw/README.md
+
+data/splits/*
+!data/splits/.gitkeep
+!data/splits/README.md
+!data/splits/split_manifest.json
+
+# Training outputs (keep metrics + tables only)
+outputs/*
+!outputs/.gitkeep
+!outputs/**/metrics.json
+!outputs/**/*.csv
+!outputs/**/*.md
+!outputs/**/*.tex
+!outputs/**/*.txt
+
+# Large model artifacts
+outputs/**/checkpoint*
+outputs/**/pytorch_model.bin
+outputs/**/model.safetensors
+outputs/**/trainer_state.json
+outputs/**/optimizer.pt
+outputs/**/scheduler.pt
+outputs/**/training_args.bin
+outputs/**/tokenizer*
+outputs/**/vocab.json
+outputs/**/merges.txt
+outputs/**/spiece.model
+
+# Logs
+logs/
+*.log
+
+# HF cache
+.cache/
+wandb/
