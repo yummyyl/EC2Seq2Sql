@@ -1,0 +1,22 @@
+{
+  "dialect": "sqlite",
+  "cohort_table": "ehr_wide",
+  "cohort_id_column": "subject_id",
+  "tables": [
+    {
+      "name": "ehr_wide",
+      "primary_key": "subject_id",
+      "columns": [
+        "subject_id",
+        "age",
+        "gender",
+        "condition",
+        "procedure",
+        "observation",
+        "laboratory",
+        "drug",
+        "event_time"
+      ]
+    }
+  ]
+}
