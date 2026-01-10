@@ -14,20 +14,86 @@ Pinned commit: 62d54af08ba52e8196e664fcec01122a4d4e38ab
 Permalink:
 https://github.com/uw-bionlp/clinical-trials-gov-data/blob/62d54af08ba52e8196e664fcec01122a4d4e38ab/data/seq2seq/train.json
 
-Local directory layout
-----------------------
 data/
-  raw/        # downloaded upstream data (NOT committed to git)
-  splits/     # reproducible splits + manifest (can be committed)
 
-Download the dataset
---------------------
-From the repository root:
+README.md
 
-  python scripts/download_seq2seq_data.py
+raw/ # downloaded upstream files (NOT committed)
 
-By default, the dataset is saved to:
-  data/raw/seq2seq_train.json
+splits/ # generated splits (NOT committed by default)
+
+schemas/ # schema summaries for Stage-2 SQL grounding (committed)
+
+
+### `data/raw/` (downloaded; not committed)
+- Stores the upstream dataset file downloaded by `scripts/download_seq2seq_data.py`.
+- This directory is kept in the repo via `.gitkeep`, while its contents are ignored by `.gitignore`.
+
+Expected file:
+- `data/raw/seq2seq_train.json`
+
+### `data/splits/` (generated; not committed by default)
+- Stores the split files produced by `scripts/prepare_splits.py`.
+- Files are written in **JSONL** format for streaming-friendly processing and reproducibility.
+
+Expected files:
+- `data/splits/train.jsonl`
+- `data/splits/valid.jsonl`
+- `data/splits/test.jsonl`
+- `data/splits/split_manifest.json`
+
+`split_manifest.json` records:
+- upstream source (repo/path/commit)
+- input SHA256 checksum
+- split seed and ratios
+- output file SHA256 checksums
+
+> If you want maximum convenience (no re-splitting needed), you may commit the split files.
+> By default, we do not commit them.
+
+### `data/schemas/` (committed)
+- Contains **schema-only** JSON files used to ground Stage-2 (snippet → SQL) generation.
+- These files contain **only table/column names** and **no patient-level records**.
+
+Provided file:
+- `data/schemas/demo_schema.json`
+
+---
+
+## Upstream Dataset (Stage-1: Eligibility text → Snippet)
+
+Stage-1 baselines use a seq2seq-style dataset where each example contains:
+
+- `intent`: natural language eligibility criterion text
+- `snippet`: lightweight structured snippet (target)
+
+Example:
+```json
+{
+  "intent": "- 18 years or older",
+  "snippet": "age().num_filter(eq().op(GTEQ).val('18').temporal_unit(YEAR))"
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 Create reproducible splits (80/10/10)
 -------------------------------------
