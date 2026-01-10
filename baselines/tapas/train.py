@@ -53,14 +53,14 @@ def save_json(path: str, obj: Dict[str, Any]) -> None:
 
 @torch.no_grad()
 def embed_text(model: TapasModel, tokenizer: TapasTokenizer, intent: str, device: torch.device) -> np.ndarray:
-    # Create a dummy 1-row table to satisfy TAPAS tokenizer interface
+    
     table = pd.DataFrame({"text": [intent]})
     enc = tokenizer(table=table, queries=["query"], return_tensors="pt", padding="max_length", truncation=True)
     enc = {k: v.to(device) for k, v in enc.items()}
     out = model(**enc)
-    # pooled output
+    
     vec = out.pooler_output[0].detach().cpu().numpy()
-    # normalize
+   
     vec = vec / (np.linalg.norm(vec) + 1e-12)
     return vec
 
@@ -68,7 +68,7 @@ def embed_text(model: TapasModel, tokenizer: TapasTokenizer, intent: str, device
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--train_path", type=str, default="data/splits/train.jsonl")
-    ap.add_argument("--valid_path", type=str, default="data/splits/valid.jsonl")  # unused, kept for interface
+    ap.add_argument("--valid_path", type=str, default="data/splits/valid.jsonl") 
     ap.add_argument("--test_path", type=str, default="data/splits/test.jsonl")
     ap.add_argument("--model_name", type=str, default="google/tapas-base")
     ap.add_argument("--output_dir", type=str, default="outputs/tapas")
@@ -96,18 +96,18 @@ def main() -> None:
     model = TapasModel.from_pretrained(args.model_name).to(device)
     model.eval()
 
-    # Embed all train intents
+    
     train_vecs = []
     train_snips = []
     for ex in tqdm(train_rows, desc="Embedding train"):
         train_vecs.append(embed_text(model, tokenizer, ex["intent"], device))
         train_snips.append(ex["snippet"])
-    train_mat = np.vstack(train_vecs)  # (N, D)
+    train_mat = np.vstack(train_vecs)  
 
     preds, golds = [], []
     for ex in tqdm(test_rows, desc="Retrieval on test"):
         q = embed_text(model, tokenizer, ex["intent"], device)
-        sims = train_mat @ q  # cosine since normalized
+        sims = train_mat @ q  
         idx = int(np.argmax(sims))
         preds.append(train_snips[idx])
         golds.append(ex["snippet"])
