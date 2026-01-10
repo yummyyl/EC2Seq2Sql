@@ -29,7 +29,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-## Data Preparation (Stage-1)
+## Data Preparation
 
 We follow a non-redistribution strategy for upstream datasets:
 We do not commit upstream dataset files.
