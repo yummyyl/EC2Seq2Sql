@@ -1,11 +1,30 @@
-# EC2Seq2Sql: Patient-Trial Matching with LLM Agents
-This repository is created to host the source code and example scripts for the paper:
-《EC2Seq2Sql: Patient-Trial Matching with LLM Agents》
+# EC2Seq2Sql
 
-## Code availability
-We provide this public repository as the access point for the code and experiment scripts used in the paper.
+This repository provides code to reproduce the **baseline experiments for Stage-1** (natural language eligibility text → lightweight structured snippet) and a **Stage-2 SQL generation agent** (lightweight structured snippet → executable SQL) used in our manuscript:
 
-## Release plan
-The full implementation (training/inference scripts and example prompts) will be released after the paper is accepted/published to ensure consistency between the public version and the final version of the article.
+**EC2Seq2Sql: Patient-Trial Matching with LLM Agents**
 
-If you need early access for review purposes, please contact the corresponding author.
+> **Scope of this repo**
+>
+> - **Stage-1 (Baselines)**: Train and evaluate multiple baseline models (GPT-2, T5, BART, BioBERT, ClinicalBERT, TAPAS, GPT-3.5-turbo) to generate lightweight structured snippets from eligibility text.
+> - **Stage-2 (SQL generation demo + interface)**: Generate schema-grounded SQL from Stage-1 snippets using a hierarchical prompt (system + human) and an LLM backend (LangChain OpenAI).  
+
+---
+
+
+---
+
+## Installation
+
+### 1) Create a Python environment
+
+```bash
+python -m venv .venv
+# Windows:
+.venv\Scripts\activate
+# Linux/macOS:
+# source .venv/bin/activate
+
+
+
+
