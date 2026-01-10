@@ -14,8 +14,8 @@ from .schema import DatabaseSchema
 @dataclass
 class SQLAgentConfig:
     schema_path: str = "data/schemas/demo_schema.json"
-    provider: str = "langchain_openai"   # or "dummy"
-    model: str = "gpt-4o-mini"           # set to GPT-4 for paper setting
+    provider: str = "langchain_openai"   
+    model: str = "gpt-4o-mini"          
     temperature: float = 0.0
     max_tokens: int = 512
     timeout_s: int = 120
