@@ -11,9 +11,6 @@ This repository provides code to reproduce the **baseline experiments for Stage-
 
 ---
 
-
----
-
 ## Installation
 
 ### 1) Create a Python environment
@@ -24,6 +21,44 @@ python -m venv .venv
 .venv\Scripts\activate
 # Linux/macOS:
 # source .venv/bin/activate
+
+### 2) Install dependencies
+
+```bash
+pip install -r requirements.txt
+
+### Data Preparation (Stage-1)
+
+
+We follow a non-redistribution strategy for upstream datasets:
+
+We do not commit upstream dataset files.
+
+We provide scripts to download the dataset from a pinned commit and generate deterministic splits.
+
+See data/README.md for details.
+
+### 1) Download the upstream seq2seq dataset
+
+```bash
+python scripts/download_seq2seq_data.py
+
+Default output: data/raw/seq2seq_train.json
+
+### 2) Prepare deterministic train/valid/test splits
+
+```bash
+python scripts/prepare_splits.py
+
+Default outputs:
+
+data/splits/train.jsonl
+
+data/splits/valid.jsonl
+
+data/splits/test.jsonl
+
+data/splits/split_manifest.json
 
 
 
