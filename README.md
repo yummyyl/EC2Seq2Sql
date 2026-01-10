@@ -134,8 +134,14 @@ We recommend committing only:
 summary tables (`csv`, `md`, `tex`)
 
 ## Citation
+If you found this work helpful, please consider citing us!
 
-
+```bash
+@article{EC2Seq2Sql,
+  title={EC2Seq2Sql: Patient-Trial Matching with LLM Agents},
+  author={Liu, Yang and Yongzhong, Han and Liang, Liu and Xiaoyan, Jiang and Ying, Li and Jihan, Huang and Qianmin, Su},
+}
+```
 
 ## License
 
