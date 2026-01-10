@@ -7,8 +7,8 @@ from typing import Optional
 
 @dataclass
 class LLMConfig:
-    provider: str = "langchain_openai"  # or "dummy"
-    model: str = "gpt-4o-mini"          # you can set to "gpt-4" for paper reproduction
+    provider: str = "langchain_openai"  
+    model: str = "gpt-4o-mini"         
     temperature: float = 0.0
     max_tokens: int = 512
     timeout_s: int = 120
