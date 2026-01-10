@@ -185,7 +185,7 @@ def main() -> None:
     trainer.save_model(model_dir)
     tokenizer.save_pretrained(model_dir)
 
-    # ---- Test generation + metrics ----
+
     model.eval()
     model.to(device)
 
