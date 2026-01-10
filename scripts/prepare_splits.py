@@ -20,14 +20,14 @@ def sha256_file(path: str) -> str:
 
 
 def normalize_example(ex: Dict[str, Any]) -> Dict[str, Any]:
-    # Keep required fields; preserve extra fields if present.
+    
     if "intent" not in ex or "snippet" not in ex:
         raise ValueError("Each example must contain 'intent' and 'snippet'.")
     return ex
 
 
 def example_id(ex: Dict[str, Any]) -> str:
-    # Deterministic ID based on content
+    
     base = f"{ex.get('intent','')}\n{ex.get('snippet','')}"
     return sha256_text(base)
 
@@ -71,7 +71,7 @@ def main() -> None:
 
     data = load_json_list(args.in_path)
 
-    # Add deterministic IDs (do not overwrite if already exists)
+   
     for ex in data:
         ex.setdefault("id", example_id(ex))
 
