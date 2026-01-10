@@ -143,7 +143,10 @@ If you found this work helpful, please consider citing us!
 }
 ```
 
-## License
+## Code availability
+
+Zenodo Concept DOI：`10.5281/zenodo.18207435`
+Version DOI/Release：`v1.0.0` / `10.5281/zenodo.18207436`
 
 
 ## Contact
