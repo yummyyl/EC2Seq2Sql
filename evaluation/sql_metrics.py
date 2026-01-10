@@ -14,7 +14,7 @@ def normalize_sql(sql: str) -> str:
 
 
 def token_set(sql: str) -> set:
-    # Very simple tokenizer: split by non-word characters
+    
     tokens = re.split(r"[^a-zA-Z0-9_]+", normalize_sql(sql))
     return set(t for t in tokens if t)
 
@@ -25,7 +25,7 @@ def exact_match_token_set(pred_sql: str, gold_sql: str) -> float:
 
 def _fetch_all(cur: sqlite3.Cursor) -> List[Tuple[Any, ...]]:
     rows = cur.fetchall()
-    # Sort to compare as sets (order-insensitive) like execution match
+    
     return sorted(rows)
 
 
@@ -78,7 +78,7 @@ def compute_metrics(
                 ex_total += execution_match_sqlite(p, g, db_path)
                 ex_count += 1
             except Exception:
-                # If either query fails, treat as 0 for EX
+               
                 ex_total += 0.0
                 ex_count += 1
 
