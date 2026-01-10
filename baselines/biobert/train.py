@@ -146,7 +146,7 @@ def main() -> None:
 
     model = EncoderDecoderModel.from_encoder_decoder_pretrained(args.encoder_name, args.decoder_name)
 
-    # configure special tokens for generation
+   
     model.config.decoder_start_token_id = dec_tok.cls_token_id
     model.config.eos_token_id = dec_tok.sep_token_id
     model.config.pad_token_id = dec_tok.pad_token_id
@@ -189,7 +189,7 @@ def main() -> None:
         args=targs,
         train_dataset=train_ds,
         eval_dataset=valid_ds,
-        tokenizer=dec_tok,  # decoding side
+        tokenizer=dec_tok, 
         data_collator=collator,
         compute_metrics=build_compute_metrics(dec_tok),
     )
