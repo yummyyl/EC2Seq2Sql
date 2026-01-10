@@ -74,7 +74,7 @@ class Seq2SeqDataset(Dataset):
         )
 
         labels = target_enc["input_ids"].squeeze(0)
-        labels[labels == self.tokenizer.pad_token_id] = -100  # ignore padding in loss
+        labels[labels == self.tokenizer.pad_token_id] = -100  
 
         return {
             "input_ids": source_enc["input_ids"].squeeze(0),
@@ -89,10 +89,10 @@ def build_compute_metrics(tokenizer: T5Tokenizer):
     def compute_metrics(eval_pred):
         predictions, labels = eval_pred
 
-        # predictions are generated token ids when predict_with_generate=True
+       
         decoded_preds = tokenizer.batch_decode(predictions, skip_special_tokens=True)
 
-        # labels contain -100; replace with pad token id for decoding
+        
         labels = np.where(labels == -100, tokenizer.pad_token_id, labels)
         decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
@@ -143,7 +143,7 @@ def main() -> None:
     ap.add_argument("--epochs", type=int, default=5)
     ap.add_argument("--weight_decay", type=float, default=0.01)
 
-    # generation during eval
+    
     ap.add_argument("--num_beams", type=int, default=4)
     ap.add_argument("--max_new_tokens", type=int, default=128)
 
@@ -218,9 +218,9 @@ def main() -> None:
 
     trainer.train()
 
-    # Evaluate on test split (for Table 4)
+    
     test_metrics = trainer.evaluate(eval_dataset=test_dataset, metric_key_prefix="test")
-    # test_metrics includes keys like: test_loss, test_rouge1, test_bleu, ...
+    
 
     os.makedirs(model_dir, exist_ok=True)
     trainer.save_model(model_dir)
