@@ -77,10 +77,10 @@ def embed_texts(
         )
         enc = {k: v.to(device) for k, v in enc.items()}
         out = model(**enc)
-        cls = out.last_hidden_state[:, 0, :]  # (B, H)
+        cls = out.last_hidden_state[:, 0, :] 
 
         cls = cls.detach().cpu().numpy().astype(np.float32)
-        # normalize for cosine
+       
         cls /= (np.linalg.norm(cls, axis=1, keepdims=True) + 1e-12)
         vecs.append(cls)
 
@@ -90,7 +90,7 @@ def embed_texts(
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--train_path", type=str, default="data/splits/train.jsonl")
-    ap.add_argument("--valid_path", type=str, default="data/splits/valid.jsonl")  # unused (kept for interface)
+    ap.add_argument("--valid_path", type=str, default="data/splits/valid.jsonl")  
     ap.add_argument("--test_path", type=str, default="data/splits/test.jsonl")
 
     ap.add_argument("--model_name", type=str, default="emilyalsentzer/Bio_ClinicalBERT")
@@ -126,17 +126,17 @@ def main() -> None:
     test_intents = [x["intent"] for x in test_rows]
     golds = [x["snippet"] for x in test_rows]
 
-    # Embed train + test intents
+    
     train_mat = embed_texts(
         model, tokenizer, train_intents, device,
         batch_size=args.embed_batch_size, max_length=args.max_length
-    )  # (N, D)
+    ) 
     test_mat = embed_texts(
         model, tokenizer, test_intents, device,
         batch_size=args.embed_batch_size, max_length=args.max_length
-    )  # (M, D)
+    ) 
 
-    # Cosine similarity via dot product (already normalized)
+   
     preds: List[str] = []
     for i in tqdm(range(test_mat.shape[0]), desc="Retrieval", leave=False):
         sims = train_mat @ test_mat[i]
