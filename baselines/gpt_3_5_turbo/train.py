@@ -8,7 +8,7 @@ import numpy as np
 from rouge_score import rouge_scorer
 import sacrebleu
 
-# optional deps
+
 from openai import OpenAI
 
 
@@ -49,13 +49,13 @@ def save_json(path: str, obj: Dict[str, Any]) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--train_path", type=str, default="data/splits/train.jsonl")  # used for few-shot
-    ap.add_argument("--valid_path", type=str, default="data/splits/valid.jsonl")  # unused
+    ap.add_argument("--train_path", type=str, default="data/splits/train.jsonl")  
+    ap.add_argument("--valid_path", type=str, default="data/splits/valid.jsonl")  
     ap.add_argument("--test_path", type=str, default="data/splits/test.jsonl")
     ap.add_argument("--output_dir", type=str, default="outputs/gpt_3_5_turbo")
     ap.add_argument("--model", type=str, default="gpt-3.5-turbo")
     ap.add_argument("--shots", type=int, default=3)
-    ap.add_argument("--max_test_examples", type=int, default=200)  # keep API cost bounded
+    ap.add_argument("--max_test_examples", type=int, default=200)  
     ap.add_argument("--temperature", type=float, default=0.0)
     args = ap.parse_args()
 
@@ -70,7 +70,7 @@ def main() -> None:
     if args.max_test_examples and args.max_test_examples > 0:
         test_rows = test_rows[: args.max_test_examples]
 
-    # build few-shot messages
+    
     fewshot = []
     for ex in train_rows[: max(0, args.shots)]:
         fewshot.append({"role": "user", "content": ex["intent"]})
