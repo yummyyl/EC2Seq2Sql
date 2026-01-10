@@ -75,65 +75,63 @@ Example:
 }
 ```
 
+## How to Prepare the Data
 
+### 1) Download the upstream dataset
 
+`python scripts/download_seq2seq_data.py`
 
+Default output:
 
+`data/raw/seq2seq_train.json`
 
+The script prints the SHA256 checksum after download.
 
+### 2) Create deterministic train/valid/test splits
 
+`python scripts/prepare_splits.py`
 
+Default outputs:
 
+`data/splits/train.jsonl`
 
+`data/splits/valid.jsonl`
 
+`data/splits/test.jsonl`
 
+`data/splits/split_manifest.json`
 
+The split method is a deterministic shuffle with a fixed seed (default: 42).
+All split parameters and file hashes are recorded in `split_manifest.json`.
 
+## Stage-2 Schema (Snippet → SQL)
 
+Stage-2 takes the Stage-1 output snippet and generates schema-grounded SQL queries.
 
+In our manuscript setting, the target database interface is a single table named patients with the following columns:
 
+`id` 、 `gender` 、 `condition` 、 `procedure` 、 `observation` 、 `laboratory` 、 `drug` 、 `birthday`
 
+Accordingly,` data/schemas/demo_schema.json` provides a public demo schema that contains:
 
+- table name and column names only
 
-Create reproducible splits (80/10/10)
--------------------------------------
-From the repository root:
+- no data rows
 
-  python scripts/prepare_splits.py
+- no private or hospital EHR content
 
-Default settings:
-- train_ratio = 0.8
-- val_ratio   = 0.1
-- test_ratio  = 0.1
-- seed        = 42
+You may replace this schema file with your own schema JSON if your database interface differs.
 
-Outputs (generated files)
--------------------------
-The split script writes the following files to data/splits/:
+## Notes on Redistribution
+- This repo does not include the upstream dataset file.
 
-  data/splits/train.jsonl
-  data/splits/valid.jsonl
-  data/splits/test.jsonl
-  data/splits/split_manifest.json
+- Users should run the scripts to download and prepare data locally.
 
-Each JSONL line is one example with at least:
-  - intent: natural language eligibility criterion
-  - snippet: target DSL snippet
-  - id: deterministic SHA256 hash derived from (intent + snippet)
+- If you are the data owner or have explicit permission to redistribute, you may commit split files for convenience.
 
-Reproducibility notes
----------------------
-1) The upstream dataset is pinned to a fixed commit, ensuring the same input file can be retrieved.
-2) The split process is deterministic given the seed and ratios. The script also records:
-   - SHA256 of the downloaded input file
-   - SHA256 of each generated split file
-   in data/splits/split_manifest.json
+## Troubleshooting
+- If download fails, check network access and GitHub raw content availability.
 
-If you need to use a different location or seed, you can override:
-  python scripts/download_seq2seq_data.py --out <PATH>
-  python scripts/prepare_splits.py --in_path <PATH> --out_dir <DIR> --seed <INT>
+- If splitting fails, ensure the input file is a JSON list and each example contains intent and snippet.
 
-Important note about "trial-aware" split
-----------------------------------------
-The upstream seq2seq file used here contains only (intent, snippet) pairs and does not include
-a trial identifier. Therefore, the provided split is a deterministic example-level split.
+- For reproducibility, keep the upstream commit SHA and split seed unchanged (both are recorded in `split_manifest.json`).
