@@ -6,7 +6,7 @@ from typing import Tuple
 
 def strip_code_fences(text: str) -> str:
     text = text.strip()
-    # Remove ```sql ... ``` wrappers if any
+   
     text = re.sub(r"^```(?:sql)?\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s*```$", "", text)
     return text.strip()
