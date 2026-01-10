@@ -4,7 +4,7 @@ import os
 from typing import Any, Dict, List, Optional, Tuple
 
 
-# Stage-1 baselines (Table 4 in the paper)
+
 BASELINES: List[Tuple[str, str]] = [
     ("gpt2", "GPT-2"),
     ("t5_small", "T5-small"),
@@ -35,7 +35,7 @@ def _normalize_metric_keys(metrics: Dict[str, Any]) -> Dict[str, float]:
       4) {"ROUGE-1":..., ...}
     Return canonical keys: ROUGE_1, ROUGE_2, ROUGE_L, BLEU
     """
-    # If nested under "metrics"
+   
     nested = _safe_get(metrics, "metrics")
     if isinstance(nested, dict):
         metrics = nested
@@ -75,7 +75,7 @@ def _read_metrics(path: str) -> Optional[Dict[str, float]]:
 def _fmt(x: Optional[float]) -> str:
     if x is None:
         return "NA"
-    # match your paper table style (4 decimals)
+   
     return f"{x:.4f}"
 
 
